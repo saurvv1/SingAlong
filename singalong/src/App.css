@@ -1,39 +1,160 @@
 .app {
   width: min(900px, 100%);
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 12vh 24px 40px;
+  padding: max(24px, calc((100vh - 360px) / 2)) 24px 40px;
+  transition: padding-top 650ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app.has-video {
+  padding-top: 8px;
 }
 
 .youtube-input {
   display: block;
   width: 100%;
-  min-height: 76px;
-  padding: 20px 24px;
-  border: 2px solid #34343e;
-  border-radius: 14px;
+  height: min(360px, calc(100vh - 120px));
+  min-height: 220px;
+  margin: 0 auto;
+  padding: 32px;
+  border: 1px solid #bcb8a7;
+  border-radius: 18px;
   outline: none;
-  background: #15151c;
-  color: #f5f5f7;
+  background: #f0eee3;
+  color: #302f28;
   font: inherit;
-  font-size: 20px;
+  font-size: 18px;
+  text-align: center;
+  opacity: 1;
+  transition:
+    width 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 650ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 650ms ease,
+    font-size 650ms ease,
+    opacity 650ms ease;
+}
+
+.youtube-input.is-collapsed {
+  width: 100%;
+  height: 76px;
+  min-height: 76px;
+  margin: 0;
+  padding: 20px 24px;
+  border-radius: 14px;
+  font-size: 16px;
+  text-align: left;
+  opacity: 0.84;
 }
 
 .youtube-input::placeholder {
-  color: #858591;
+  color: #817e70;
+  text-transform: lowercase;
 }
 
 .youtube-input:focus {
-  border-color: #a855f7;
+  border-color: #78805e;
+  box-shadow: 0 0 0 3px rgba(120, 128, 94, 0.14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app,
+  .youtube-input {
+    transition: none;
+  }
 }
 
 .youtube-player {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  margin-top: 24px;
+  margin-top: 8px;
   overflow: hidden;
   border-radius: 14px;
-  background: #000;
+  background: #171813;
+  cursor: pointer;
+}
+
+.youtube-player:focus-visible {
+  outline: 3px solid #78805e;
+  outline-offset: 3px;
+}
+
+.player-controls-row {
+  position: relative;
+}
+
+.player-controls-row .audio-actions {
+  position: absolute;
+  left: calc(100% + 16px);
+  bottom: 0;
+  width: 132px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.player-controls-row .action-button {
+  justify-content: center;
+  width: 100%;
+  padding: 0 8px;
+}
+
+.player-controls-row .separate-vocals-button {
+  gap: 7px;
+  min-height: 50px;
+  text-align: left;
+  line-height: 1.2;
+}
+
+.separate-vocals-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+}
+
+.separate-vocals-profile {
+  fill: #718096;
+}
+
+.separate-vocals-zigzag {
+  fill: none;
+  stroke: #b2695b;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.separate-vocals-sound {
+  fill: none;
+  stroke: #78805e;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+}
+
+.vocal-toggle-button {
+  gap: 7px;
+}
+
+.vocal-toggle-sound {
+  fill: none;
+  stroke: #78805e;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.vocal-toggle-button .vocals-off .vocal-toggle-sound {
+  opacity: 0;
+}
+
+.player-controls-row .audio-name {
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .youtube-player iframe {
@@ -42,13 +163,14 @@
   width: 100%;
   height: 100%;
   border: 0;
+  pointer-events: none;
 }
 
 .timeline-times {
   display: flex;
   justify-content: space-between;
-  margin: 16px 2px 7px;
-  color: #a1a1aa;
+  margin: 8px 2px 4px;
+  color: #777568;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -56,9 +178,9 @@
 .waveform {
   display: block;
   width: 100%;
-  height: 92px;
+  height: 60px;
   border-radius: 10px;
-  background: #15151c;
+  background: #d2cfbf;
   cursor: default;
 }
 
@@ -79,7 +201,7 @@
   left: calc(100% + 16px);
   width: 132px;
   transform: translateY(-50%);
-  color: #a1a1aa;
+  color: #747263;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -87,7 +209,7 @@
 .timeline-volume input {
   width: 100%;
   min-width: 0;
-  accent-color: #c084fc;
+  accent-color: #78805e;
   cursor: pointer;
 }
 
@@ -101,19 +223,19 @@
 }
 
 .recording-waveform {
-  background: #21171d;
+  background: #eee8dd;
 }
 
 .recording-waveform-live {
-  box-shadow: inset 0 0 0 1px rgba(251, 113, 133, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(178, 105, 91, 0.3);
 }
 
 .timeline-row + .timeline-row {
-  margin-top: 5px;
+  margin-top: 3px;
 }
 
 .waveform:focus-visible {
-  outline: 2px solid #a855f7;
+  outline: 2px solid #78805e;
   outline-offset: 3px;
 }
 
@@ -131,10 +253,10 @@
   align-items: center;
   min-height: 42px;
   padding: 0 15px;
-  border: 1px solid #393944;
+  border: 1px solid #c4bfad;
   border-radius: 9px;
-  background: #1a1a22;
-  color: #f5f5f7;
+  background: #f0eee3;
+  color: #302f28;
   font: inherit;
   font-size: 14px;
   cursor: pointer;
@@ -142,7 +264,7 @@
 
 .upload-button:hover,
 .action-button:hover:not(:disabled) {
-  border-color: #a855f7;
+  border-color: #78805e;
 }
 
 .action-button:disabled {
@@ -151,16 +273,53 @@
 }
 
 .record-button {
-  border-color: #713143;
+  width: 64px;
+  height: 64px;
+  min-height: 64px;
+  flex: 0 0 64px;
+  justify-content: center;
+  padding: 0;
+  border: 2px solid #777568;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.player-controls-row .record-button {
+  width: 64px;
+  align-self: center;
 }
 
 .record-button:hover:not(:disabled) {
-  border-color: #fb7185;
+  border-color: #b2695b;
 }
 
 .record-button.is-recording {
-  background: #6b2135;
-  border-color: #fb7185;
+  background: transparent;
+  border-color: #777568;
+}
+
+.record-button-indicator {
+  display: block;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: #e34855;
+  transition:
+    width 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-radius 260ms ease;
+}
+
+.record-button.is-recording .record-button-indicator {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-button-indicator {
+    transition: none;
+  }
 }
 
 .file-input,
@@ -170,7 +329,7 @@ audio {
 
 .audio-name,
 .audio-note {
-  color: #a1a1aa;
+  color: #777568;
   font-size: 13px;
 }
 
@@ -178,19 +337,39 @@ audio {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  color: #d4d4dc;
+  color: #49483f;
   font-size: 13px;
 }
 
 .vocal-volume input {
   width: 140px;
-  accent-color: #a855f7;
+  accent-color: #78805e;
   cursor: pointer;
+}
+
+.player-controls-row .vocal-volume {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: 4px;
+}
+
+.player-controls-row .vocal-volume input {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+}
+
+.vocal-volume-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .vocal-volume span:last-child {
   min-width: 36px;
-  color: #a1a1aa;
+  color: #777568;
   font-variant-numeric: tabular-nums;
 }
 
@@ -207,7 +386,7 @@ audio {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 7px;
-  color: #d4d4dc;
+  color: #49483f;
   font-size: 13px;
 }
 
@@ -219,34 +398,38 @@ audio {
   border: 0;
   border-radius: 999px;
   appearance: none;
-  background: #292932;
+  background: #c9c5b5;
 }
 
 .separation-progress progress::-webkit-progress-bar {
   border-radius: 999px;
-  background: #292932;
+  background: #c9c5b5;
 }
 
 .separation-progress progress::-webkit-progress-value {
   border-radius: 999px;
-  background: linear-gradient(90deg, #9333ea, #c084fc);
+  background: linear-gradient(90deg, #727a56, #a0a27e);
   transition: width 0.3s ease;
 }
 
 .separation-progress progress::-moz-progress-bar {
   border-radius: 999px;
-  background: linear-gradient(90deg, #9333ea, #c084fc);
+  background: linear-gradient(90deg, #727a56, #a0a27e);
 }
 
 .error-message {
   margin: 10px 0 0;
-  color: #fca5a5;
+  color: #9a493e;
   font-size: 14px;
 }
 
 @media (max-width: 600px) {
   .app {
-    padding: 10vh 16px 24px;
+    padding: max(24px, calc((100vh - 360px) / 2)) 16px 24px;
+  }
+
+  .app.has-video {
+    padding-top: 8px;
   }
 
   .youtube-input {
@@ -258,5 +441,26 @@ audio {
   .timeline-volume {
     width: 92px;
     gap: 5px;
+  }
+
+  .player-controls-row {
+    position: static;
+  }
+
+  .player-controls-row .audio-actions {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .player-controls-row .action-button {
+    width: auto;
+  }
+
+  .player-controls-row .audio-name {
+    text-align: left;
   }
 }

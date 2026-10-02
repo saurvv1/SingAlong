@@ -75,6 +75,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [youtubePlaying, setYoutubePlaying] = useState(false);
   const audioUrlRef = useRef(audioUrl);
+  const youtubeInputRef = useRef<HTMLInputElement>(null);
+  const shortcutStateRef = useRef({ canRecord: false, canSeparate: false, hasStems: false, canTogglePlayback: false });
+  const shortcutActionsRef = useRef<{ toggleRecording?: () => void; toggleVocals?: () => void }>({});
 
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -101,12 +104,23 @@ export default function App() {
   const instrumentalRef = useRef<HTMLAudioElement>(null);
   const videoId = getYouTubeId(url);
   audioUrlRef.current = audioUrl;
+  shortcutStateRef.current = {
+    canRecord: Boolean(audioUrl && !loadingYoutubeAudio),
+    canSeparate: Boolean(audioUrl && !stems && !separating && !loadingYoutubeAudio),
+    hasStems: Boolean(stems),
+    canTogglePlayback: Boolean(videoId),
+  };
 
   const callPlayerMethod = (methodName: string, ...args: any[]) => {
     const player = playerRef.current;
     const method = player?.[methodName];
     if (typeof method === "function") return method.apply(player, args);
     return undefined;
+  };
+
+  const toggleYouTubePlayback = () => {
+    const state = callPlayerMethod("getPlayerState");
+    callPlayerMethod(state === 1 ? "pauseVideo" : "playVideo");
   };
 
   useEffect(() => {
@@ -120,10 +134,12 @@ export default function App() {
       if (disposed || !playerContainerRef.current) return;
       playerRef.current = new window.YT!.Player(playerContainerRef.current, {
         videoId,
-        playerVars: { playsinline: 1 },
+        playerVars: { playsinline: 1, controls: 0, disablekb: 1 },
         events: {
           onReady: (event: any) => {
             setDuration(typeof event.target.getDuration === "function" ? event.target.getDuration() || 0 : 0);
+            const iframe = event.target.getIframe?.();
+            if (iframe) iframe.tabIndex = -1;
             if (audioUrlRef.current && typeof event.target.mute === "function") event.target.mute();
             timer = window.setInterval(() => {
               if (typeof event.target.getCurrentTime === "function") {
@@ -242,7 +258,7 @@ export default function App() {
     waveform.forEach((peak, index) => {
       const height = Math.max(2, peak * rect.height * 0.9);
       const x = index * barWidth;
-      context.fillStyle = index / waveform.length <= progress ? "#c084fc" : "#52525f";
+      context.fillStyle = index / waveform.length <= progress ? "#78805e" : "#b4af9e";
       context.fillRect(x, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
     });
   }, [waveform, currentTime, duration]);
@@ -265,7 +281,7 @@ export default function App() {
       segment.peaks.forEach((peak, index) => {
         const x = xStart + index * barWidth;
         const height = Math.max(2, peak * rect.height * 0.9);
-        context.fillStyle = "#fb7185";
+        context.fillStyle = "#b2695b";
         context.fillRect(x, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
       });
     });
@@ -276,7 +292,7 @@ export default function App() {
       liveRecordingSegment.peaks.forEach((peak, index) => {
         const x = xStart + index * barWidth;
         const height = Math.max(2, peak * rect.height * 0.9);
-        context.fillStyle = "#fda4af";
+        context.fillStyle = "#cf8a7a";
         context.fillRect(x, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
       });
     }
@@ -599,6 +615,19 @@ export default function App() {
     };
   }, [videoId]);
 
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      if (event.target === youtubeInputRef.current) return;
+      const pastedText = event.clipboardData?.getData("text/plain").trim();
+      if (!pastedText || !getYouTubeId(pastedText)) return;
+      event.preventDefault();
+      setUrl(pastedText);
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, []);
+
   const toggleRecording = async () => {
     setRecordingError("");
     if (recordingActiveRef.current) {
@@ -697,6 +726,34 @@ export default function App() {
     }
   };
 
+  shortcutActionsRef.current = {
+    toggleRecording: () => void toggleRecording(),
+    toggleVocals: () => {
+      if (shortcutStateRef.current.hasStems) setVocalEnabled((enabled) => !enabled);
+      else if (shortcutStateRef.current.canSeparate) void separateVocals();
+    },
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+      const key = event.key.toLowerCase();
+      if (key === "r" && shortcutStateRef.current.canRecord) {
+        event.preventDefault();
+        shortcutActionsRef.current.toggleRecording?.();
+      } else if (key === "v" && (shortcutStateRef.current.hasStems || shortcutStateRef.current.canSeparate)) {
+        event.preventDefault();
+        shortcutActionsRef.current.toggleVocals?.();
+      } else if (key === "k" && shortcutStateRef.current.canTogglePlayback) {
+        event.preventDefault();
+        toggleYouTubePlayback();
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+
   const moveWithKeyboard = (event: KeyboardEvent<HTMLCanvasElement>) => {
     if (!duration) return;
     if (event.key === "ArrowRight") seek(Math.min(duration, currentTime + 5));
@@ -704,12 +761,13 @@ export default function App() {
   };
 
   return (
-    <main className="app">
+    <main className={`app${videoId ? " has-video" : ""}`}>
       <input
-        className="youtube-input"
+        ref={youtubeInputRef}
+        className={`youtube-input${videoId ? " is-collapsed" : ""}`}
         type="url"
         aria-label="YouTube video link"
-        placeholder="Paste a YouTube video link"
+        placeholder="enter youtube link"
         value={url}
         onChange={(event) => setUrl(event.target.value)}
         autoComplete="url"
@@ -717,7 +775,78 @@ export default function App() {
 
       {videoId && (
         <>
-          <div className="youtube-player"><div ref={playerContainerRef} /></div>
+          <div className="player-controls-row">
+          <div
+            className="youtube-player"
+            role="button"
+            tabIndex={0}
+            aria-label="Toggle video playback"
+            title="Click to play or pause (K)"
+            onClick={toggleYouTubePlayback}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                toggleYouTubePlayback();
+              }
+            }}
+          >
+            <div ref={playerContainerRef} />
+          </div>
+            <div className="audio-actions">
+              {audioName && <span className="audio-name">{audioName}</span>}
+              <button
+                className={`action-button record-button${recording ? " is-recording" : ""}`}
+                onClick={() => void toggleRecording()}
+                disabled={!audioUrl || loadingYoutubeAudio}
+                aria-label={recording ? "Stop recording" : "Start recording"}
+                aria-pressed={recording}
+                title={recording ? "Stop recording (R)" : "Start recording (R)"}
+              >
+                <span className="record-button-indicator" aria-hidden="true" />
+              </button>
+              {audioUrl && !stems && (
+                <button className="action-button separate-vocals-button" onClick={() => void separateVocals()} disabled={separating || loadingYoutubeAudio}>
+                  <svg className="separate-vocals-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+                    <path className="separate-vocals-profile" d="M12 56h22v-8c5-3 9-8 10-14l5-2-5-4 5-4-6-4C42 12 35 6 24 6 13 6 6 14 6 25c0 7 3 12 8 17 3 3 2 9-2 14Z" />
+                    <path className="separate-vocals-zigzag" d="m47 15-5 6 4 4-5 5 4 4-5 6 4 4-5 6" />
+                    <path className="separate-vocals-sound" d="m53 23 7-7M54 32h9m-10 9 7 7" />
+                  </svg>
+                  <span>{separating ? "Separating…" : "Separate vocals"}</span>
+                </button>
+              )}
+              {stems && (
+                <>
+                  <button
+                    className="action-button separate-vocals-button vocal-toggle-button"
+                    onClick={() => setVocalEnabled((enabled) => !enabled)}
+                    title="Toggle vocals (V)"
+                    aria-label={`Turn vocals ${vocalEnabled ? "off" : "on"}`}
+                    aria-pressed={vocalEnabled}
+                  >
+                    <svg className={`separate-vocals-icon${vocalEnabled ? " vocals-on" : " vocals-off"}`} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+                      <path className="separate-vocals-profile" d="M12 56h22v-8c5-3 9-8 10-14l5-2-5-4 5-4-6-4C42 12 35 6 24 6 13 6 6 14 6 25c0 7 3 12 8 17 3 3 2 9-2 14Z" />
+                      <path className="vocal-toggle-sound" d="m53 23 7-7M54 32h9m-10 9 7 7" />
+                    </svg>
+                    <span>Vocals: {vocalEnabled ? "On" : "Off"}</span>
+                  </button>
+                  <label className="vocal-volume">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Math.round(vocalVolume * 100)}
+                      aria-label="Vocal volume"
+                      onChange={(event) => setVocalVolume(Number(event.target.value) / 100)}
+                    />
+                    <span className="vocal-volume-caption">
+                      <span>Vocal volume</span>
+                      <span>{Math.round(vocalVolume * 100)}%</span>
+                    </span>
+                  </label>
+                </>
+              )}
+            </div>
+          </div>
           <div className="timeline-times"><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div>
           <div className="timeline-row">
             <canvas
@@ -751,36 +880,6 @@ export default function App() {
             </label>
           </div>
 
-          <div className="audio-actions">
-            {audioName && <span className="audio-name">{audioName}</span>}
-            <button className={`action-button record-button${recording ? " is-recording" : ""}`} onClick={() => void toggleRecording()} disabled={!audioUrl || loadingYoutubeAudio} aria-pressed={recording}>
-              {recording ? "Stop recording" : "Record"}
-            </button>
-            {audioUrl && !stems && (
-              <button className="action-button" onClick={() => void separateVocals()} disabled={separating || loadingYoutubeAudio}>
-                {separating ? "Separating…" : "Separate vocals"}
-              </button>
-            )}
-            {stems && (
-              <>
-                <button className="action-button" onClick={() => setVocalEnabled((enabled) => !enabled)}>
-                  Vocals: {vocalEnabled ? "On" : "Off"}
-                </button>
-                <label className="vocal-volume">
-                  <span>Vocal volume</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={Math.round(vocalVolume * 100)}
-                    aria-label="Vocal volume"
-                    onChange={(event) => setVocalVolume(Number(event.target.value) / 100)}
-                  />
-                  <span>{Math.round(vocalVolume * 100)}%</span>
-                </label>
-              </>
-            )}
-          </div>
           {separating && (
             <div className="separation-progress">
               <div className="progress-label">
@@ -791,7 +890,6 @@ export default function App() {
             </div>
           )}
           {loadingYoutubeAudio && <p className="audio-note">Extracting audio from YouTube…</p>}
-          <p className="audio-note">Audio is extracted automatically. Use videos you own or are allowed to download. The local separation service is needed for vocal removal.</p>
           {error && <p className="error-message">{error}</p>}
           {recordingError && <p className="error-message">{recordingError}</p>}
 
