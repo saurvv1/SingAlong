@@ -8,7 +8,9 @@ declare global {
   }
 }
 
-const SEPARATOR_URL = "http://localhost:8000/api/separate";
+const BACKEND_URL = "http://127.0.0.1:8001";
+const SEPARATOR_URL = `${BACKEND_URL}/api/separate`;
+const YOUTUBE_AUDIO_URL = `${BACKEND_URL}/api/youtube-audio`;
 let youtubeApiPromise: Promise<void> | null = null;
 
 function loadYouTubeApi() {
@@ -47,6 +49,8 @@ function getYouTubeId(value: string): string | null {
 }
 
 type Stems = { vocals: string; instrumental: string };
+type RecordingSegment = { peaks: number[]; offset: number; duration: number; src: string };
+type LiveRecordingSegment = { peaks: number[]; offset: number; duration: number };
 
 export default function App() {
   const [url, setUrl] = useState("");
@@ -54,7 +58,14 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [audioUrl, setAudioUrl] = useState("");
   const [audioName, setAudioName] = useState("");
+  const [loadingYoutubeAudio, setLoadingYoutubeAudio] = useState(false);
   const [waveform, setWaveform] = useState<number[]>([]);
+  const [recordingSegments, setRecordingSegments] = useState<RecordingSegment[]>([]);
+  const [liveRecordingSegment, setLiveRecordingSegment] = useState<LiveRecordingSegment | null>(null);
+  const [audioVolume, setAudioVolume] = useState(1);
+  const [recordingVolume, setRecordingVolume] = useState(1);
+  const [recording, setRecording] = useState(false);
+  const [recordingError, setRecordingError] = useState("");
   const [stems, setStems] = useState<Stems | null>(null);
   const [vocalEnabled, setVocalEnabled] = useState(true);
   const [vocalVolume, setVocalVolume] = useState(1);
@@ -63,17 +74,40 @@ export default function App() {
   const [separationMessage, setSeparationMessage] = useState("");
   const [error, setError] = useState("");
   const [youtubePlaying, setYoutubePlaying] = useState(false);
+  const audioUrlRef = useRef(audioUrl);
 
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const playbackIntentRef = useRef(false);
   const resumingFromBackgroundRef = useRef(false);
   const waveformRef = useRef<HTMLCanvasElement>(null);
+  const recordingWaveformRef = useRef<HTMLCanvasElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingAudioContextRef = useRef<AudioContext | null>(null);
+  const recordingAnalyserRef = useRef<AnalyserNode | null>(null);
+  const recordingWaveformFrameRef = useRef<number | null>(null);
+  const liveRecordingPeaksRef = useRef<number[]>([]);
+  const recordingActiveRef = useRef(false);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const nextSegmentOffsetRef = useRef<number | null>(null);
+  const recordingSegmentsRef = useRef<RecordingSegment[]>([]);
+  const recordingAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const selectedFileRef = useRef<File | null>(null);
+  const youtubeAudioRequestRef = useRef(0);
+  const loadAudioRef = useRef<(file?: File) => Promise<void>>(async () => {});
   const audioRef = useRef<HTMLAudioElement>(null);
   const vocalsRef = useRef<HTMLAudioElement>(null);
   const instrumentalRef = useRef<HTMLAudioElement>(null);
   const videoId = getYouTubeId(url);
+  audioUrlRef.current = audioUrl;
+
+  const callPlayerMethod = (methodName: string, ...args: any[]) => {
+    const player = playerRef.current;
+    const method = player?.[methodName];
+    if (typeof method === "function") return method.apply(player, args);
+    return undefined;
+  };
 
   useEffect(() => {
     if (!videoId || !playerContainerRef.current) return;
@@ -89,11 +123,15 @@ export default function App() {
         playerVars: { playsinline: 1 },
         events: {
           onReady: (event: any) => {
-            setDuration(event.target.getDuration() || 0);
-            if (audioUrl) event.target.mute();
+            setDuration(typeof event.target.getDuration === "function" ? event.target.getDuration() || 0 : 0);
+            if (audioUrlRef.current && typeof event.target.mute === "function") event.target.mute();
             timer = window.setInterval(() => {
-              setCurrentTime(event.target.getCurrentTime() || 0);
-              setDuration(event.target.getDuration() || 0);
+              if (typeof event.target.getCurrentTime === "function") {
+                setCurrentTime(event.target.getCurrentTime() || 0);
+              }
+              if (typeof event.target.getDuration === "function") {
+                setDuration(event.target.getDuration() || 0);
+              }
             }, 200);
           },
           onStateChange: (event: any) => {
@@ -102,6 +140,7 @@ export default function App() {
               resumingFromBackgroundRef.current = false;
             } else if (event.data === 0) {
               playbackIntentRef.current = false;
+              pauseRecordingCapture();
             } else if (
               event.data === 2 &&
               !document.hidden &&
@@ -110,6 +149,8 @@ export default function App() {
             ) {
               playbackIntentRef.current = false;
             }
+            if (event.data === 1) resumeRecordingCapture(event.target.getCurrentTime() || 0);
+            if (event.data === 2) pauseRecordingCapture();
             setYoutubePlaying(event.data === 1);
           },
         },
@@ -119,7 +160,7 @@ export default function App() {
     return () => {
       disposed = true;
       if (timer) window.clearInterval(timer);
-      playerRef.current?.destroy();
+      callPlayerMethod("destroy");
       playerRef.current = null;
       playbackIntentRef.current = false;
       resumingFromBackgroundRef.current = false;
@@ -128,8 +169,8 @@ export default function App() {
   }, [videoId]);
 
   useEffect(() => {
-    if (audioUrl) playerRef.current?.mute();
-    else playerRef.current?.unMute();
+    if (audioUrl) callPlayerMethod("mute");
+    else callPlayerMethod("unMute");
   }, [audioUrl]);
 
   useEffect(() => {
@@ -141,6 +182,49 @@ export default function App() {
   useEffect(() => () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
   }, [audioUrl]);
+
+  useEffect(() => () => {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (recordingWaveformFrameRef.current !== null) cancelAnimationFrame(recordingWaveformFrameRef.current);
+    if (recordingAudioContextRef.current && recordingAudioContextRef.current.state !== "closed") {
+      void recordingAudioContextRef.current.close();
+    }
+  }, []);
+
+  useEffect(() => () => {
+    recordingSegmentsRef.current.forEach((segment) => URL.revokeObjectURL(segment.src));
+  }, []);
+
+  useEffect(() => {
+    audioRef.current && (audioRef.current.volume = audioVolume);
+    if (instrumentalRef.current) instrumentalRef.current.volume = audioVolume;
+    if (vocalsRef.current) vocalsRef.current.volume = audioVolume * vocalVolume;
+  }, [audioVolume, vocalVolume, stems, audioUrl]);
+
+  useEffect(() => {
+    const syncRecordings = () => {
+      const player = playerRef.current;
+      const playing = Boolean(
+        player && playbackIntentRef.current && callPlayerMethod("getPlayerState") === 1,
+      );
+      const time = playing ? callPlayerMethod("getCurrentTime") || 0 : 0;
+      recordingSegments.forEach((segment) => {
+        const track = recordingAudioRefs.current.get(segment.src);
+        if (!track) return;
+        track.volume = recordingVolume;
+        if (playing && time >= segment.offset && time < segment.offset + segment.duration) {
+          const segmentTime = time - segment.offset;
+          if (Math.abs(track.currentTime - segmentTime) > 0.2) track.currentTime = segmentTime;
+          if (track.paused) void track.play().catch(() => {});
+        } else if (!track.paused) {
+          track.pause();
+        }
+      });
+    };
+    syncRecordings();
+    const timer = window.setInterval(syncRecordings, 100);
+    return () => window.clearInterval(timer);
+  }, [recordingSegments, recordingVolume, youtubePlaying]);
 
   useEffect(() => {
     const canvas = waveformRef.current;
@@ -164,6 +248,148 @@ export default function App() {
   }, [waveform, currentTime, duration]);
 
   useEffect(() => {
+    const canvas = recordingWaveformRef.current;
+    if (!canvas || !duration) return;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.scale(ratio, ratio);
+    context.clearRect(0, 0, rect.width, rect.height);
+    recordingSegments.forEach((segment) => {
+      const xStart = (segment.offset / duration) * rect.width;
+      const width = (segment.duration / duration) * rect.width;
+      const barWidth = width / segment.peaks.length;
+      segment.peaks.forEach((peak, index) => {
+        const x = xStart + index * barWidth;
+        const height = Math.max(2, peak * rect.height * 0.9);
+        context.fillStyle = "#fb7185";
+        context.fillRect(x, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
+      });
+    });
+    if (liveRecordingSegment?.peaks.length) {
+      const xStart = (liveRecordingSegment.offset / duration) * rect.width;
+      const width = (liveRecordingSegment.duration / duration) * rect.width;
+      const barWidth = width / liveRecordingSegment.peaks.length;
+      liveRecordingSegment.peaks.forEach((peak, index) => {
+        const x = xStart + index * barWidth;
+        const height = Math.max(2, peak * rect.height * 0.9);
+        context.fillStyle = "#fda4af";
+        context.fillRect(x, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
+      });
+    }
+  }, [recordingSegments, liveRecordingSegment, duration]);
+
+  const stopLiveWaveform = () => {
+    if (recordingWaveformFrameRef.current !== null) {
+      cancelAnimationFrame(recordingWaveformFrameRef.current);
+      recordingWaveformFrameRef.current = null;
+    }
+    setLiveRecordingSegment(null);
+  };
+
+  const stopRecordingMonitor = () => {
+    stopLiveWaveform();
+    recordingAnalyserRef.current = null;
+    const context = recordingAudioContextRef.current;
+    recordingAudioContextRef.current = null;
+    if (context && context.state !== "closed") void context.close();
+  };
+
+  const startRecordingSegment = (offset: number) => {
+    const stream = recordingStreamRef.current;
+    if (!stream || !recordingActiveRef.current) return;
+    const recorder = new MediaRecorder(stream);
+    recorderRef.current = recorder;
+    const segmentOffset = offset;
+    liveRecordingPeaksRef.current = [];
+    const startedAt = performance.now();
+    let lastSampleAt = 0;
+    setLiveRecordingSegment({ peaks: [], offset: segmentOffset, duration: 0 });
+    recordingChunksRef.current = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) recordingChunksRef.current.push(event.data);
+    };
+    recorder.onstop = async () => {
+      const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+      const nextOffset = nextSegmentOffsetRef.current;
+      nextSegmentOffsetRef.current = null;
+      if (recordingActiveRef.current && nextOffset !== null && callPlayerMethod("getPlayerState") === 1) {
+        startRecordingSegment(nextOffset);
+      } else if (!recordingActiveRef.current) {
+        recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+        recordingStreamRef.current = null;
+        stopRecordingMonitor();
+        setRecording(false);
+      }
+
+      if (recorderRef.current === recorder) stopLiveWaveform();
+
+      if (blob.size) {
+        const src = URL.createObjectURL(blob);
+        try {
+          const audioContext = new AudioContext();
+          const decoded = await audioContext.decodeAudioData(await blob.arrayBuffer());
+          await audioContext.close();
+          const samples = decoded.getChannelData(0);
+          const count = Math.min(900, Math.max(1, Math.floor(samples.length / 256)));
+          const bucketSize = Math.max(1, Math.floor(samples.length / count));
+          const peaks = Array.from({ length: count }, (_, bucket) => {
+            let peak = 0;
+            for (let i = bucket * bucketSize; i < Math.min(samples.length, (bucket + 1) * bucketSize); i += 1) {
+              peak = Math.max(peak, Math.abs(samples[i]));
+            }
+            return peak;
+          });
+          const segment = {
+            peaks,
+            offset: segmentOffset,
+            duration: decoded.duration,
+            src,
+          };
+          setRecordingSegments((segments) => {
+            const next = [...segments, segment];
+            recordingSegmentsRef.current = next;
+            return next;
+          });
+        } catch {
+          URL.revokeObjectURL(src);
+          setRecordingError("A recording segment could not be added to the waveform.");
+        }
+      }
+    };
+    recorder.start();
+
+    const sampleWaveform = (timestamp: number) => {
+      if (recorderRef.current !== recorder || recorder.state !== "recording") return;
+      const analyser = recordingAnalyserRef.current;
+      if (analyser && timestamp - lastSampleAt >= 80) {
+        const samples = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(samples);
+        let peak = 0;
+        for (const sample of samples) peak = Math.max(peak, Math.abs(sample - 128) / 128);
+        liveRecordingPeaksRef.current.push(peak);
+        if (liveRecordingPeaksRef.current.length > 1400) {
+          liveRecordingPeaksRef.current = liveRecordingPeaksRef.current.reduce<number[]>((compressed, value, index, peaks) => {
+            if (index % 2 === 0) compressed.push(Math.max(value, peaks[index + 1] || 0));
+            return compressed;
+          }, []);
+        }
+        setLiveRecordingSegment({
+          peaks: [...liveRecordingPeaksRef.current],
+          offset: segmentOffset,
+          duration: (performance.now() - startedAt) / 1000,
+        });
+        lastSampleAt = timestamp;
+      }
+      recordingWaveformFrameRef.current = requestAnimationFrame(sampleWaveform);
+    };
+    recordingWaveformFrameRef.current = requestAnimationFrame(sampleWaveform);
+  };
+
+  useEffect(() => {
     const player = playerRef.current;
     if (!audioUrl || !videoId || !player) return;
     const syncAudio = () => {
@@ -180,7 +406,7 @@ export default function App() {
 
         if (stems) {
           audioRef.current?.pause();
-          if (vocalsRef.current) vocalsRef.current.volume = vocalVolume;
+          if (vocalsRef.current) vocalsRef.current.volume = audioVolume * vocalVolume;
           if (!vocalEnabled) vocalsRef.current?.pause();
         }
 
@@ -205,7 +431,7 @@ export default function App() {
     syncAudio();
     const timer = window.setInterval(syncAudio, 200);
     return () => window.clearInterval(timer);
-  }, [audioUrl, stems, vocalEnabled, vocalVolume, youtubePlaying, videoId]);
+  }, [audioUrl, stems, vocalEnabled, vocalVolume, audioVolume, youtubePlaying, videoId]);
 
   useEffect(() => {
     if (!audioUrl || !videoId) return;
@@ -270,8 +496,14 @@ export default function App() {
   };
 
   const seek = (time: number) => {
+    if (recordingActiveRef.current) {
+      const isPlaying = callPlayerMethod("getPlayerState") === 1;
+      nextSegmentOffsetRef.current = isPlaying ? time : null;
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      else if (isPlaying) startRecordingSegment(time);
+    }
     setCurrentTime(time);
-    playerRef.current?.seekTo(time, true);
+    callPlayerMethod("seekTo", time, true);
     [audioRef.current, vocalsRef.current, instrumentalRef.current].forEach((track) => {
       if (track) track.currentTime = time;
     });
@@ -279,6 +511,15 @@ export default function App() {
 
   const loadAudio = async (file?: File) => {
     if (!file) return;
+    recordingSegmentsRef.current.forEach((segment) => URL.revokeObjectURL(segment.src));
+    recordingSegmentsRef.current = [];
+    recordingAudioRefs.current.clear();
+    if (recordingActiveRef.current) {
+      recordingActiveRef.current = false;
+      nextSegmentOffsetRef.current = null;
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    }
+    setRecordingSegments([]);
     selectedFileRef.current = file;
     setError("");
     setStems(null);
@@ -308,6 +549,110 @@ export default function App() {
       setError("This audio file could not be decoded by the browser.");
     }
   };
+  loadAudioRef.current = loadAudio;
+
+  useEffect(() => {
+    if (!videoId) {
+      setLoadingYoutubeAudio(false);
+      return;
+    }
+
+    const requestId = ++youtubeAudioRequestRef.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoadingYoutubeAudio(true);
+      setError("");
+      try {
+        const response = await fetch(YOUTUBE_AUDIO_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}` }),
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not extract audio from this YouTube video.");
+
+        const audioResponse = await fetch(`${BACKEND_URL}${result.audio}`, { signal: controller.signal });
+        if (!audioResponse.ok) throw new Error("The extracted audio could not be loaded.");
+        const audioBlob = await audioResponse.blob();
+        if (requestId !== youtubeAudioRequestRef.current) return;
+
+        const fileName = `${String(result.title || "YouTube audio").replace(/[\\/:*?"<>|]/g, "_")}.mp3`;
+        await loadAudioRef.current(new File([audioBlob], fileName, { type: "audio/mpeg" }));
+      } catch (cause) {
+        if (controller.signal.aborted || requestId !== youtubeAudioRequestRef.current) return;
+        setError(
+          cause instanceof TypeError
+            ? "Can't reach the local audio service. Start it from the backend folder with: .\\.venv\\Scripts\\Activate.ps1, then python -m uvicorn app:app --port 8001."
+            : cause instanceof Error
+              ? cause.message
+              : "Could not load audio from this YouTube video.",
+        );
+      } finally {
+        if (requestId === youtubeAudioRequestRef.current) setLoadingYoutubeAudio(false);
+      }
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [videoId]);
+
+  const toggleRecording = async () => {
+    setRecordingError("");
+    if (recordingActiveRef.current) {
+      recordingActiveRef.current = false;
+      nextSegmentOffsetRef.current = null;
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      else {
+        recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+        recordingStreamRef.current = null;
+        stopRecordingMonitor();
+        setRecording(false);
+      }
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setRecordingError("Audio recording is not supported by this browser.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      const audioContext = new AudioContext();
+      recordingAudioContextRef.current = audioContext;
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      recordingAnalyserRef.current = analyser;
+      audioContext.createMediaStreamSource(stream).connect(analyser);
+      await audioContext.resume();
+      recordingActiveRef.current = true;
+      setRecording(true);
+      if (callPlayerMethod("getPlayerState") === 1) startRecordingSegment(currentTime);
+    } catch {
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      stopRecordingMonitor();
+      setRecordingError("Microphone access was denied or unavailable. Allow microphone access and try again.");
+    }
+  };
+
+  function pauseRecordingCapture() {
+    nextSegmentOffsetRef.current = null;
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+  }
+
+  function resumeRecordingCapture(offset: number) {
+    if (
+      recordingActiveRef.current &&
+      recordingStreamRef.current &&
+      recorderRef.current?.state !== "recording"
+    ) {
+      nextSegmentOffsetRef.current = null;
+      startRecordingSegment(offset);
+    }
+  }
 
   const separateVocals = async () => {
     const file = selectedFileRef.current;
@@ -342,7 +687,7 @@ export default function App() {
     } catch (cause) {
       setError(
         cause instanceof TypeError
-          ? "Can't reach the local vocal separation service. Start it from the backend folder with: .\\.venv\\Scripts\\Activate.ps1, then python -m uvicorn app:app --reload --port 8000."
+          ? "Can't reach the local vocal separation service. Start it from the backend folder with: .\\.venv\\Scripts\\Activate.ps1, then python -m uvicorn app:app --port 8001."
           : cause instanceof Error
             ? cause.message
             : "Vocal separation failed. Check that the local service is running.",
@@ -374,30 +719,45 @@ export default function App() {
         <>
           <div className="youtube-player"><div ref={playerContainerRef} /></div>
           <div className="timeline-times"><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div>
-          <canvas
-            ref={waveformRef}
-            className={`waveform${audioUrl ? " waveform-ready" : ""}`}
-            role="slider"
-            aria-label="Audio waveform timeline"
-            aria-valuemin={0}
-            aria-valuemax={Math.floor(duration)}
-            aria-valuenow={Math.floor(currentTime)}
-            tabIndex={duration ? 0 : -1}
-            onClick={(event) => {
-              if (duration) {
-                const rect = event.currentTarget.getBoundingClientRect();
-                seek(((event.clientX - rect.left) / rect.width) * duration);
-              }
-            }}
-            onKeyDown={moveWithKeyboard}
-          />
+          <div className="timeline-row">
+            <canvas
+              ref={waveformRef}
+              className={`waveform${audioUrl ? " waveform-ready" : ""}`}
+              role="slider"
+              aria-label="Audio waveform timeline"
+              aria-valuemin={0}
+              aria-valuemax={Math.floor(duration)}
+              aria-valuenow={Math.floor(currentTime)}
+              tabIndex={duration ? 0 : -1}
+              onClick={(event) => {
+                if (duration) {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  seek(((event.clientX - rect.left) / rect.width) * duration);
+                }
+              }}
+              onKeyDown={moveWithKeyboard}
+            />
+            <label className="timeline-volume">
+              <input type="range" min="0" max="100" value={Math.round(audioVolume * 100)} aria-label="Uploaded audio volume" onChange={(event) => setAudioVolume(Number(event.target.value) / 100)} />
+              <span>{Math.round(audioVolume * 100)}%</span>
+            </label>
+          </div>
+
+          <div className="timeline-row">
+            <canvas ref={recordingWaveformRef} className={`waveform recording-waveform${liveRecordingSegment ? " recording-waveform-live" : ""}`} role="img" aria-label={liveRecordingSegment ? "Your recording waveform updating live" : "Your recording waveform"} />
+            <label className="timeline-volume">
+              <input type="range" min="0" max="100" value={Math.round(recordingVolume * 100)} aria-label="Recording volume" onChange={(event) => setRecordingVolume(Number(event.target.value) / 100)} />
+              <span>{Math.round(recordingVolume * 100)}%</span>
+            </label>
+          </div>
 
           <div className="audio-actions">
-            <label className="upload-button" htmlFor="audio-file">{audioName ? "Replace audio" : "Upload matching audio"}</label>
-            <input id="audio-file" className="file-input" type="file" accept="audio/*" onChange={(event) => void loadAudio(event.target.files?.[0])} />
             {audioName && <span className="audio-name">{audioName}</span>}
+            <button className={`action-button record-button${recording ? " is-recording" : ""}`} onClick={() => void toggleRecording()} disabled={!audioUrl || loadingYoutubeAudio} aria-pressed={recording}>
+              {recording ? "Stop recording" : "Record"}
+            </button>
             {audioUrl && !stems && (
-              <button className="action-button" onClick={() => void separateVocals()} disabled={separating}>
+              <button className="action-button" onClick={() => void separateVocals()} disabled={separating || loadingYoutubeAudio}>
                 {separating ? "Separating…" : "Separate vocals"}
               </button>
             )}
@@ -430,8 +790,10 @@ export default function App() {
               <progress value={separationProgress} max="100" aria-label="Vocal separation progress" />
             </div>
           )}
-          <p className="audio-note">Upload audio you’re allowed to use. The local separation service is needed for vocal removal.</p>
+          {loadingYoutubeAudio && <p className="audio-note">Extracting audio from YouTube…</p>}
+          <p className="audio-note">Audio is extracted automatically. Use videos you own or are allowed to download. The local separation service is needed for vocal removal.</p>
           {error && <p className="error-message">{error}</p>}
+          {recordingError && <p className="error-message">{recordingError}</p>}
 
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" />}
           {stems && (
@@ -440,6 +802,17 @@ export default function App() {
               <audio ref={instrumentalRef} src={stems.instrumental} preload="auto" />
             </>
           )}
+          {recordingSegments.map((segment) => (
+            <audio
+              key={segment.src}
+              ref={(element) => {
+                if (element) recordingAudioRefs.current.set(segment.src, element);
+                else recordingAudioRefs.current.delete(segment.src);
+              }}
+              src={segment.src}
+              preload="auto"
+            />
+          ))}
         </>
       )}
     </main>
