@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import Sampler, { type SamplerTake } from "./Sampler";
 import "./App.css";
 
 declare global {
@@ -51,16 +52,45 @@ function getYouTubeId(value: string): string | null {
 type Stems = { vocals: string; instrumental: string };
 type RecordingSegment = { peaks: number[]; offset: number; duration: number; src: string };
 type LiveRecordingSegment = { peaks: number[]; offset: number; duration: number };
+type LyricsResult = { id: number; trackName: string; artistName: string; albumName: string; duration: number; syncedLyrics: string };
+type LyricLine = { time: number; text: string };
+type YouTubeSearchResult = { id: string; title: string; channel: string; thumbnail: string; duration: number | null };
+
+function parseSyncedLyrics(raw: string): LyricLine[] {
+  const lines: LyricLine[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const timestamps = [...line.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+    const text = line.replace(/\[[^\]]*\]/g, "").trim();
+    if (!text || !timestamps.length) continue;
+    for (const timestamp of timestamps) {
+      const fraction = timestamp[3] || "0";
+      const secondsFraction = Number(fraction) / (10 ** fraction.length);
+      lines.push({
+        time: Number(timestamp[1]) * 60 + Number(timestamp[2]) + secondsFraction,
+        text,
+      });
+    }
+  }
+  return lines.sort((first, second) => first.time - second.time);
+}
 
 export default function App() {
   const [url, setUrl] = useState("");
+  const [youtubeResults, setYoutubeResults] = useState<YouTubeSearchResult[]>([]);
+  const [youtubeSearchLoading, setYoutubeSearchLoading] = useState(false);
+  const [youtubeSearchError, setYoutubeSearchError] = useState("");
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [audioUrl, setAudioUrl] = useState("");
   const [audioName, setAudioName] = useState("");
+  const [lyricsQuery, setLyricsQuery] = useState("");
+  const [selectedLyrics, setSelectedLyrics] = useState<LyricsResult | null>(null);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [lyricsError, setLyricsError] = useState("");
   const [loadingYoutubeAudio, setLoadingYoutubeAudio] = useState(false);
   const [waveform, setWaveform] = useState<number[]>([]);
   const [recordingSegments, setRecordingSegments] = useState<RecordingSegment[]>([]);
+  const [samplerTakes, setSamplerTakes] = useState<SamplerTake[]>([]);
   const [liveRecordingSegment, setLiveRecordingSegment] = useState<LiveRecordingSegment | null>(null);
   const [audioVolume, setAudioVolume] = useState(1);
   const [recordingVolume, setRecordingVolume] = useState(1);
@@ -85,6 +115,7 @@ export default function App() {
   const resumingFromBackgroundRef = useRef(false);
   const waveformRef = useRef<HTMLCanvasElement>(null);
   const recordingWaveformRef = useRef<HTMLCanvasElement>(null);
+  const samplerRecordingWaveformRef = useRef<HTMLCanvasElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingAudioContextRef = useRef<AudioContext | null>(null);
@@ -98,11 +129,25 @@ export default function App() {
   const recordingAudioRefs = useRef(new Map<string, HTMLAudioElement>());
   const selectedFileRef = useRef<File | null>(null);
   const youtubeAudioRequestRef = useRef(0);
+  const youtubeSearchRequestRef = useRef(0);
+  const lyricsSearchRequestRef = useRef(0);
   const loadAudioRef = useRef<(file?: File) => Promise<void>>(async () => {});
   const audioRef = useRef<HTMLAudioElement>(null);
   const vocalsRef = useRef<HTMLAudioElement>(null);
   const instrumentalRef = useRef<HTMLAudioElement>(null);
   const videoId = getYouTubeId(url);
+  const lyricLines = useMemo(
+    () => selectedLyrics ? parseSyncedLyrics(selectedLyrics.syncedLyrics) : [],
+    [selectedLyrics],
+  );
+  const activeLyricIndex = (() => {
+    let active = -1;
+    for (let index = 0; index < lyricLines.length; index += 1) {
+      if (lyricLines[index].time > currentTime) break;
+      active = index;
+    }
+    return active;
+  })();
   audioUrlRef.current = audioUrl;
   shortcutStateRef.current = {
     canRecord: Boolean(audioUrl && !loadingYoutubeAudio),
@@ -120,8 +165,96 @@ export default function App() {
 
   const toggleYouTubePlayback = () => {
     const state = callPlayerMethod("getPlayerState");
-    callPlayerMethod(state === 1 ? "pauseVideo" : "playVideo");
+    if (state === 1) {
+      callPlayerMethod("pauseVideo");
+      [audioRef.current, vocalsRef.current, instrumentalRef.current].forEach((track) => track?.pause());
+      return;
+    }
+
+    callPlayerMethod("playVideo");
+    if (audioUrlRef.current) {
+      const time = callPlayerMethod("getCurrentTime") || 0;
+      const tracks = stems && instrumentalRef.current
+        ? [instrumentalRef.current, ...(vocalEnabled && vocalsRef.current ? [vocalsRef.current] : [])]
+        : [audioRef.current];
+      tracks.forEach((track) => {
+        if (!track) return;
+        track.currentTime = time;
+        void track.play().catch(() => {});
+      });
+    }
   };
+
+  const searchYouTubeTitles = async (query: string) => {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery || getYouTubeId(normalizedQuery)) return;
+    const requestId = ++youtubeSearchRequestRef.current;
+    setYoutubeSearchLoading(true);
+    setYoutubeSearchError("");
+    setYoutubeResults([]);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/youtube-search?query=${encodeURIComponent(normalizedQuery)}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "YouTube search failed.");
+      if (requestId !== youtubeSearchRequestRef.current) return;
+      setYoutubeResults((result.results || []) as YouTubeSearchResult[]);
+      if (!result.results?.length) setYoutubeSearchError("No videos found. Try another search.");
+    } catch (cause) {
+      if (requestId !== youtubeSearchRequestRef.current) return;
+      setYoutubeSearchError(cause instanceof Error ? cause.message : "YouTube search failed.");
+    } finally {
+      if (requestId === youtubeSearchRequestRef.current) setYoutubeSearchLoading(false);
+    }
+  };
+
+  const selectYouTubeResult = (result: YouTubeSearchResult) => {
+    setYoutubeResults([]);
+    setYoutubeSearchError("");
+    setUrl(`https://www.youtube.com/watch?v=${result.id}`);
+  };
+
+  const searchLyrics = useCallback(async (query: string) => {
+    const normalizedQuery = query.trim().replace(/\.(mp3|m4a|aac|wav|ogg|flac|opus)$/i, "");
+    const requestId = ++lyricsSearchRequestRef.current;
+    setSelectedLyrics(null);
+    setLyricsError("");
+    if (!normalizedQuery) {
+      setLyricsLoading(false);
+      return;
+    }
+
+    setLyricsLoading(true);
+    try {
+      let results: LyricsResult[];
+      try {
+        const response = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(normalizedQuery)}`, {
+          headers: { "X-User-Agent": "SingAlong/0.1 (local lyrics search)" },
+        });
+        if (!response.ok) throw new Error(`LRCLIB returned HTTP ${response.status}.`);
+        const result = await response.json();
+        results = (Array.isArray(result) ? result : result.results || []) as LyricsResult[];
+      } catch {
+        const response = await fetch(`${BACKEND_URL}/api/lyrics/search?track_name=${encodeURIComponent(normalizedQuery)}`);
+        const result = await response.json();
+        if (!response.ok) {
+          const detail = response.status === 404
+            ? "The running audio service does not have the lyrics route yet. Stop and restart npm run dev so it reloads the updated backend."
+            : result.detail || "Could not search for lyrics.";
+          throw new Error(detail);
+        }
+        results = (result.results || []) as LyricsResult[];
+      }
+      if (requestId !== lyricsSearchRequestRef.current) return;
+      const syncedResults = results.filter((result) => result.syncedLyrics);
+      if (syncedResults.length) setSelectedLyrics(syncedResults[0]);
+      else setLyricsError("No synchronized lyrics found. Try a shorter or more accurate song title.");
+    } catch (cause) {
+      if (requestId !== lyricsSearchRequestRef.current) return;
+      setLyricsError(cause instanceof Error ? cause.message : "Could not search for lyrics.");
+    } finally {
+      if (requestId === lyricsSearchRequestRef.current) setLyricsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!videoId || !playerContainerRef.current) return;
@@ -130,6 +263,9 @@ export default function App() {
 
     setDuration(0);
     setCurrentTime(0);
+    setAudioName("");
+    setSelectedLyrics(null);
+    setLyricsError("");
     loadYouTubeApi().then(() => {
       if (disposed || !playerContainerRef.current) return;
       playerRef.current = new window.YT!.Player(playerContainerRef.current, {
@@ -138,9 +274,16 @@ export default function App() {
         events: {
           onReady: (event: any) => {
             setDuration(typeof event.target.getDuration === "function" ? event.target.getDuration() || 0 : 0);
+            const videoTitle = event.target.getVideoData?.().title?.trim();
+            if (videoTitle) {
+              setLyricsQuery(videoTitle);
+              void searchLyrics(videoTitle);
+            }
             const iframe = event.target.getIframe?.();
             if (iframe) iframe.tabIndex = -1;
-            if (audioUrlRef.current && typeof event.target.mute === "function") event.target.mute();
+            // Keep YouTube audible until the extracted track actually starts.
+            // Its audio is the fallback when browser autoplay blocks our media element.
+            if (typeof event.target.unMute === "function") event.target.unMute();
             timer = window.setInterval(() => {
               if (typeof event.target.getCurrentTime === "function") {
                 setCurrentTime(event.target.getCurrentTime() || 0);
@@ -182,7 +325,15 @@ export default function App() {
       resumingFromBackgroundRef.current = false;
       setYoutubePlaying(false);
     };
-  }, [videoId]);
+  }, [videoId, searchLyrics]);
+
+  useEffect(() => {
+    if (!audioName) return;
+    const query = audioName.replace(/\.(mp3|m4a|aac|wav|ogg|flac|opus)$/i, "");
+    setLyricsQuery(query);
+    void searchLyrics(query);
+    return () => { lyricsSearchRequestRef.current += 1; };
+  }, [audioName, searchLyrics]);
 
   useEffect(() => {
     if (audioUrl) callPlayerMethod("mute");
@@ -297,6 +448,33 @@ export default function App() {
       });
     }
   }, [recordingSegments, liveRecordingSegment, duration]);
+
+  useEffect(() => {
+    const canvas = samplerRecordingWaveformRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, rect.width, rect.height);
+    if (!duration) return;
+    samplerTakes.forEach((take) => {
+      if (!take.peaks.length) return;
+      const xStart = (take.offset / duration) * rect.width;
+      const width = (take.duration / duration) * rect.width;
+      const barWidth = width / take.peaks.length;
+      take.peaks.forEach((peak, index) => {
+        const height = Math.max(2, peak * rect.height * 0.88);
+        context.fillStyle = "#73865f";
+        context.fillRect(xStart + index * barWidth, (rect.height - height) / 2, Math.max(1, barWidth - 1), height);
+      });
+    });
+    context.fillStyle = "#b2695b";
+    context.fillRect((currentTime / duration) * rect.width, 0, 2, rect.height);
+  }, [samplerTakes, currentTime, duration]);
 
   const stopLiveWaveform = () => {
     if (recordingWaveformFrameRef.current !== null) {
@@ -416,8 +594,10 @@ export default function App() {
         // The uploaded file remains the clock while the YouTube iframe
         // buffers or resumes after the page regains focus.
         const playing = playbackIntentRef.current;
+        const instrumental = instrumentalRef.current;
+        const vocals = vocalsRef.current;
         const tracks = stems
-          ? [instrumentalRef.current, ...(vocalEnabled ? [vocalsRef.current] : [])]
+          ? [instrumental, ...(vocalEnabled ? [vocals] : [])]
           : [audioRef.current];
 
         if (stems) {
@@ -710,8 +890,8 @@ export default function App() {
       }
 
       setStems({
-        vocals: `http://localhost:8000${result.vocals}`,
-        instrumental: `http://localhost:8000${result.instrumental}`,
+        vocals: `${BACKEND_URL}${result.vocals}`,
+        instrumental: `${BACKEND_URL}${result.instrumental}`,
       });
     } catch (cause) {
       setError(
@@ -736,6 +916,7 @@ export default function App() {
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      if (event.target === youtubeInputRef.current) return;
       if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
       const key = event.key.toLowerCase();
       if (key === "r" && shortcutStateRef.current.canRecord) {
@@ -760,18 +941,44 @@ export default function App() {
     if (event.key === "ArrowLeft") seek(Math.max(0, currentTime - 5));
   };
 
+  const lyricWindowStart = Math.max(0, Math.min(
+    activeLyricIndex < 0 ? 0 : activeLyricIndex - 2,
+    Math.max(0, lyricLines.length - 5),
+  ));
+
   return (
     <main className={`app${videoId ? " has-video" : ""}`}>
-      <input
-        ref={youtubeInputRef}
-        className={`youtube-input${videoId ? " is-collapsed" : ""}`}
-        type="url"
-        aria-label="YouTube video link"
-        placeholder="enter youtube link"
-        value={url}
-        onChange={(event) => setUrl(event.target.value)}
-        autoComplete="url"
-      />
+      <div className={`youtube-input-shell${videoId ? " has-video" : ""}`}>
+        <input
+          ref={youtubeInputRef}
+          className={`youtube-input${videoId ? " is-collapsed" : ""}`}
+          type="text"
+          aria-label="YouTube video link"
+          placeholder="paste a YouTube link or search a title (press Enter)"
+          value={url}
+          onChange={(event) => { youtubeSearchRequestRef.current += 1; setYoutubeSearchLoading(false); setUrl(event.target.value); setYoutubeResults([]); setYoutubeSearchError(""); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !getYouTubeId(url)) {
+              event.preventDefault();
+              void searchYouTubeTitles(url);
+            }
+          }}
+          autoComplete="url"
+        />
+        {videoId && duration > 0 && <div className="youtube-input-progress" role="progressbar" aria-label="Song progress" aria-valuemin={0} aria-valuemax={Math.floor(duration)} aria-valuenow={Math.floor(currentTime)}>
+          <span style={{ width: `${Math.max(0, Math.min(100, (currentTime / duration) * 100))}%` }} />
+        </div>}
+      </div>
+        {youtubeSearchLoading && <p className="youtube-search-message" role="status">Searching YouTube…</p>}
+        {youtubeSearchError && <p className="youtube-search-message youtube-search-error" role="status">{youtubeSearchError}</p>}
+        {youtubeResults.length > 0 && <ul className="youtube-search-results" aria-label="YouTube search results">
+          {youtubeResults.map((result) => <li key={result.id}>
+            <button type="button" onClick={() => selectYouTubeResult(result)}>
+              {result.thumbnail && <img src={result.thumbnail} alt="" />}
+              <span className="youtube-result-text"><strong>{result.title}</strong><span>{result.channel}{result.duration ? ` · ${formatTime(result.duration)}` : ""}</span></span>
+            </button>
+          </li>)}
+        </ul>}
 
       {videoId && (
         <>
@@ -800,36 +1007,28 @@ export default function App() {
                 disabled={!audioUrl || loadingYoutubeAudio}
                 aria-label={recording ? "Stop recording" : "Start recording"}
                 aria-pressed={recording}
-                title={recording ? "Stop recording (R)" : "Start recording (R)"}
+                title={recording ? "Stop recording (R)" : "Start recording (R) to capture microphone and sampler"}
               >
                 <span className="record-button-indicator" aria-hidden="true" />
               </button>
-              {audioUrl && !stems && (
-                <button className="action-button separate-vocals-button" onClick={() => void separateVocals()} disabled={separating || loadingYoutubeAudio}>
-                  <svg className="separate-vocals-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-                    <path className="separate-vocals-profile" d="M12 56h22v-8c5-3 9-8 10-14l5-2-5-4 5-4-6-4C42 12 35 6 24 6 13 6 6 14 6 25c0 7 3 12 8 17 3 3 2 9-2 14Z" />
-                    <path className="separate-vocals-zigzag" d="m47 15-5 6 4 4-5 5 4 4-5 6 4 4-5 6" />
-                    <path className="separate-vocals-sound" d="m53 23 7-7M54 32h9m-10 9 7 7" />
-                  </svg>
-                  <span>{separating ? "Separating…" : "Separate vocals"}</span>
-                </button>
-              )}
-              {stems && (
+              {audioUrl && (
                 <>
                   <button
-                    className="action-button separate-vocals-button vocal-toggle-button"
-                    onClick={() => setVocalEnabled((enabled) => !enabled)}
-                    title="Toggle vocals (V)"
-                    aria-label={`Turn vocals ${vocalEnabled ? "off" : "on"}`}
-                    aria-pressed={vocalEnabled}
+                    className={`action-button separate-vocals-button${stems ? ` vocal-toggle-button${vocalEnabled ? " vocals-on" : " vocals-off"}` : ""}`}
+                    onClick={() => stems ? setVocalEnabled((enabled) => !enabled) : void separateVocals()}
+                    disabled={!stems && (separating || loadingYoutubeAudio)}
+                    title={stems ? `Turn vocals ${vocalEnabled ? "off" : "on"} (V)` : separating ? "Separating vocals" : "Separate vocals"}
+                    aria-label={stems ? `Turn vocals ${vocalEnabled ? "off" : "on"}` : separating ? "Separating vocals" : "Separate vocals"}
+                    aria-pressed={stems ? vocalEnabled : undefined}
                   >
-                    <svg className={`separate-vocals-icon${vocalEnabled ? " vocals-on" : " vocals-off"}`} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+                    <svg className="separate-vocals-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
                       <path className="separate-vocals-profile" d="M12 56h22v-8c5-3 9-8 10-14l5-2-5-4 5-4-6-4C42 12 35 6 24 6 13 6 6 14 6 25c0 7 3 12 8 17 3 3 2 9-2 14Z" />
-                      <path className="vocal-toggle-sound" d="m53 23 7-7M54 32h9m-10 9 7 7" />
+                      {!stems && <path className="separate-vocals-zigzag" d="m47 15-5 6 4 4-5 5 4 4-5 6 4 4-5 6" />}
+                      {stems && <path className="vocal-toggle-sound" d="m53 23 7-7M54 32h9m-10 9 7 7" />}
                     </svg>
-                    <span>Vocals: {vocalEnabled ? "On" : "Off"}</span>
+                    <span className="vocal-button-state" aria-hidden="true">{stems ? (vocalEnabled ? "ON" : "OFF") : separating ? "…" : ""}</span>
                   </button>
-                  <label className="vocal-volume">
+                  {stems && <label className="vocal-volume">
                     <input
                       type="range"
                       min="0"
@@ -842,11 +1041,39 @@ export default function App() {
                       <span>Vocal volume</span>
                       <span>{Math.round(vocalVolume * 100)}%</span>
                     </span>
-                  </label>
+                  </label>}
                 </>
               )}
             </div>
           </div>
+          <input
+            className="youtube-seekbar"
+            type="range"
+            min="0"
+            max={duration || 0}
+            step="0.1"
+            value={duration ? Math.min(currentTime, duration) : 0}
+            aria-label="Seek through video"
+            disabled={!duration}
+            onChange={(event) => seek(Number(event.target.value))}
+            style={{ "--seek-progress": `${duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0}%` } as CSSProperties & { "--seek-progress": string }}
+          />
+          {audioName && <section className="lyrics-panel" aria-label="Synchronized lyrics">
+            {!selectedLyrics && <>
+              <form className="lyrics-search" onSubmit={(event) => { event.preventDefault(); void searchLyrics(lyricsQuery); }}>
+                <input aria-label="Search lyrics by song title" value={lyricsQuery} onChange={(event) => setLyricsQuery(event.target.value)} placeholder="Search by song title" />
+                <button type="submit" disabled={lyricsLoading}>{lyricsLoading ? "Searching…" : "Search"}</button>
+              </form>
+              {lyricsError && <p className="lyrics-message" role="status">{lyricsError}</p>}
+            </>}
+            {selectedLyrics && <div className="lyrics-lines" aria-label="Lyrics synchronized to song playback" aria-live="off">
+              {lyricLines.slice(lyricWindowStart, lyricWindowStart + 5).map((line, visibleIndex) => {
+                const lineIndex = lyricWindowStart + visibleIndex;
+                return <p key={`${line.time}-${lineIndex}`} className={`lyrics-line${lineIndex === activeLyricIndex ? " is-active" : ""}`} aria-current={lineIndex === activeLyricIndex ? "true" : undefined}>{line.text}</p>;
+              })}
+            </div>}
+            <p className="lyrics-credit">Synchronized lyrics via LRCLIB</p>
+          </section>}
           <div className="timeline-times"><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div>
           <div className="timeline-row">
             <canvas
@@ -879,6 +1106,23 @@ export default function App() {
               <span>{Math.round(recordingVolume * 100)}%</span>
             </label>
           </div>
+
+          <div className="sampler-take-heading">
+            <span>Instrument timeline {recording ? "· recording" : samplerTakes.length ? `· ${samplerTakes.length} sound${samplerTakes.length === 1 ? "" : "s"}` : "· press R, then play the sampler"}</span>
+            {samplerTakes.length > 0 && <button type="button" onClick={() => setSamplerTakes([])}>Clear</button>}
+          </div>
+          <div className="timeline-row">
+            <canvas ref={samplerRecordingWaveformRef} className={`waveform sampler-take-waveform${recording ? " sampler-take-recording" : ""}`} role="img" aria-label="Sampler instrument recording waveform" />
+          </div>
+
+          <Sampler
+            enabled={Boolean(videoId)}
+            currentTime={currentTime}
+            recording={recording}
+            playing={youtubePlaying}
+            takes={samplerTakes}
+            setTakes={setSamplerTakes}
+          />
 
           {separating && (
             <div className="separation-progress">
