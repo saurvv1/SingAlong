@@ -820,6 +820,7 @@ export default function App() {
       if (![song.title, song.artist, song.credit, song.audio, song.vocals, song.instrumental].every((value) => typeof value === "string" && value.trim()) || typeof song.syncedLyrics !== "string" || !/^[\w-]{11}$/.test(song.youtubeId) || !Number.isFinite(song.startSeconds) || song.startSeconds < 0) {
         throw new Error("The demo song is missing audio or video information.");
       }
+      if (!song.syncedLyrics.trim()) throw new Error("The demo's synchronized lyrics are missing. Refresh the page to load the latest version.");
       // Check all stems before exposing the playback controls.
       const responses = await Promise.all([song.audio, song.vocals, song.instrumental].map((path) => fetch(demoAsset(path))));
       if (responses.some((asset) => !asset.ok)) throw new Error("A demo audio file could not be loaded.");
@@ -1038,15 +1039,18 @@ export default function App() {
 
   return (
     <main className={`app${videoId ? " has-video" : ""}`}>
-      {DEMO_MODE && <section className="demo-intro">
-        <p className="demo-eyebrow">SingAlong · Interactive demo</p>
-        <h1>Sing it your way.</h1>
-        <p>Turn down the original singer and record your own voice. Try headphones for a cleaner recording.</p>
-        <p className="demo-note">This demo uses a prepared song. YouTube search and processing new songs are available in the full local app.</p>
-        {!demoSong && <button className="action-button" disabled={demoLoading} onClick={() => void loadDemo()}>{demoLoading ? "Loading song…" : "Try demo song"}</button>}
-        {demoSong && <p className="demo-note">{demoSong.credit} · Recordings stay in this browser session.</p>}
+      {DEMO_MODE && <>
+        {!demoSong ? <button className="youtube-input demo-song-choice" disabled={demoLoading} onClick={() => void loadDemo()}>
+          <span>Drake — Janice STFU</span>
+          <small>{demoLoading ? "Loading song…" : "Click to sing along"}</small>
+        </button> : <div className="youtube-input-shell has-video">
+          <div className="youtube-input is-collapsed">Drake — Janice STFU</div>
+          {duration > 0 && <div className="youtube-input-progress" role="progressbar" aria-label="Song progress" aria-valuemin={0} aria-valuemax={Math.floor(duration)} aria-valuenow={Math.floor(currentTime)}>
+            <span style={{ width: `${Math.max(0, Math.min(100, (currentTime / duration) * 100))}%` }} />
+          </div>}
+        </div>}
         {!demoSong && error && <p role="alert" className="error-message">{error}</p>}
-      </section>}
+      </>}
       {!DEMO_MODE && <>
       <div className={`youtube-input-shell${videoId ? " has-video" : ""}`}>
         <input
@@ -1162,14 +1166,6 @@ export default function App() {
             style={{ "--seek-progress": `${duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0}%` } as CSSProperties & { "--seek-progress": string }}
           />
           {audioName && <section className="lyrics-panel" aria-label="Synchronized lyrics">
-            {DEMO_MODE && !selectedLyrics && demoSong?.plainLyrics && <>
-              <h2 className="demo-lyrics-heading">Lyrics</h2>
-              <div className="demo-plain-lyrics" role="region" aria-label="Song lyrics" tabIndex={0}>
-                <p>{demoSong.plainLyrics}</p>
-              </div>
-              <p className="lyrics-credit">Lyrics via <a href="https://lrclib.net" target="_blank" rel="noreferrer">LRCLIB</a> · Scroll to follow along. Synchronized timing is unavailable for this song.</p>
-            </>}
-            {DEMO_MODE && !selectedLyrics && !demoSong?.plainLyrics && <p className="lyrics-message">Lyrics are unavailable for this demo song.</p>}
             {!selectedLyrics && !DEMO_MODE && <>
               <form className="lyrics-search" onSubmit={(event) => { event.preventDefault(); void searchLyrics(lyricsQuery); }}>
                 <input aria-label="Search lyrics by song title" value={lyricsQuery} onChange={(event) => setLyricsQuery(event.target.value)} placeholder="Search by song title" />
@@ -1183,7 +1179,7 @@ export default function App() {
                 return <p key={`${line.time}-${lineIndex}`} className={`lyrics-line${lineIndex === activeLyricIndex ? " is-active" : ""}`} aria-current={lineIndex === activeLyricIndex ? "true" : undefined}>{line.text}</p>;
               })}
             </div>}
-            {(!DEMO_MODE || selectedLyrics) && <p className="lyrics-credit">{DEMO_MODE ? "Prepared lyrics for this demo" : "Synchronized lyrics via LRCLIB"}</p>}
+            {(!DEMO_MODE || selectedLyrics) && <p className="lyrics-credit">{DEMO_MODE ? "Lyrics via LRCLIB · Synchronized for this demo" : "Synchronized lyrics via LRCLIB"}</p>}
           </section>}
           <div className="timeline-times"><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div>
           <div className="timeline-row">

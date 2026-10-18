@@ -1,0 +1,2 @@
+# Optional offline preparation only; the hosted demo needs no Python runtime.
+stable-ts[fw]==2.19.1
