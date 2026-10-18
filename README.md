@@ -4,6 +4,8 @@ SingAlong is a web app for practicing singing along with your favorite songs. Se
 
 The idea is to make shadow singing simple: start by singing with the artist, then gradually rely on your own voice.
 
+**[Try the live demo](https://saurvv1.github.io/SingAlong/)** — no installation required.
+
 ## Features
 
 - Search YouTube by song title or paste a video link.
@@ -17,7 +19,7 @@ The idea is to make shadow singing simple: start by singing with the artist, the
 
 ## Project status
 
-SingAlong is in an early stage and is under active development. The goal is a hosted app that you can open through a link, with no installation needed to use it. A public deployment is not available yet.
+SingAlong is in an early stage and is under active development. A public portfolio demo is hosted on GitHub Pages. Searching and processing other songs currently requires running the full app locally.
 
 An interactive portfolio demo is prepared with a 45-second excerpt of Drake's **Janice STFU**, its YouTube embed, and prepared vocal and instrumental tracks. Try it locally with `npm run dev:demo` from `singalong`. This demo does not need the Python backend. Lyrics are unavailable for the selected track. Screenshots will be added later.
 
@@ -25,7 +27,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for free GitHub Pages deployment instructions
 
 ## Run locally
 
-These instructions are for running the source code while the hosted version is being prepared.
+These instructions are for running the full app from source. The hosted demo does not require this setup.
 
 ### Requirements
 
@@ -73,7 +75,7 @@ This builds the frontend into `singalong/dist`. The Python backend must be hoste
 
 - Improve playback reliability and error messages.
 - Improve lyrics matching and recording synchronization.
-- Prepare a public demo within a zero-cost hosting budget.
+- Expand and improve the free public demo.
 - Improve the interface and add screenshots and a walkthrough.
 
 ## Built with

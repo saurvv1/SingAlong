@@ -45,4 +45,6 @@ The workflow is manual and fails if the song metadata or audio files are missing
 
 ## Current verification
 
+The regular app and portfolio demo production builds pass. The GitHub Pages deployment succeeded, and the public page, song metadata, and three audio files return successful HTTP responses with the expected content types.
+
 Build checks do not verify audio quality, lyric alignment, browser microphone permissions, or real-device recording behavior. Complete the preview checks with the actual song before publishing.
