@@ -2,7 +2,7 @@
 
 The GitHub Pages build enables a prepared-song demo of Drake's **Janice STFU**, using the full music video version from the beginning. It embeds the music video (`SD4yRDY9mek`) and uses audio prepared from that same video for the recording, vocal controls, and sampler without starting the Python backend. If YouTube playback fails, the prepared audio remains usable. The regular local app keeps its YouTube search and processing features.
 
-Synchronized lyrics were not available from LRCLIB for this track when the demo was prepared. The demo shows an unavailable message; it does not invent lyric timestamps.
+LRCLIB provides plain lyrics for this track, but no synchronized timestamps. The demo includes those lyrics in a scrollable panel. When timestamped lyrics are added, the existing synchronized display takes priority over the plain text.
 
 ## Prepare the song
 
@@ -11,7 +11,7 @@ Use a recording and lyrics you have permission to redistribute publicly, includi
 1. Prepare the song (or a shorter excerpt) and its vocal and instrumental stems using the local backend.
 2. Place the three audio files in `singalong/public/demo/`.
 3. Copy `song.example.json` to `song.json` in the same directory.
-4. Fill in the title, artist, credit, audio filenames, YouTube ID, and original song start time in seconds. All three audio tracks must have matching start times and duration. Use the same clip boundaries for every track. Set `syncedLyrics` to timestamped LRC text relative to the excerpt, or an empty string when unavailable.
+4. Fill in the title, artist, credit, audio filenames, YouTube ID, and original song start time in seconds. All three audio tracks must have matching start times and duration. Use the same clip boundaries for every track. Set `syncedLyrics` to timestamped LRC text relative to the excerpt, or an empty string when unavailable. Set `plainLyrics` to the lyrics text to provide a readable fallback without timestamps.
 5. Use your own credit text; the example is a placeholder, not a license grant.
 
 The original audio is the playback clock; it is muted while the prepared vocal and instrumental tracks play. Recordings stay in memory in the visitor's browser session and are not uploaded. Sampler sounds are stored in that browser's local library.

@@ -15,6 +15,7 @@ try {
     if (!statSync(path).isFile() || statSync(path).size === 0) throw new Error(`Empty ${field} file.`);
   }
   if (typeof song.syncedLyrics !== "string") throw new Error("Set syncedLyrics to LRC text or an empty string.");
+  if (song.plainLyrics !== undefined && typeof song.plainLyrics !== "string") throw new Error("Plain lyrics must be text.");
   if (song.syncedLyrics && !/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/.test(song.syncedLyrics)) throw new Error("Lyrics must use timestamped LRC format.");
   if (!/^[\w-]{11}$/.test(song.youtubeId)) throw new Error("Add the YouTube video ID.");
   if (!Number.isFinite(song.startSeconds) || song.startSeconds < 0) throw new Error("Add the excerpt start time in seconds.");

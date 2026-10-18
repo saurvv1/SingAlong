@@ -8,6 +8,8 @@ export type DemoSong = {
   vocals: string;
   instrumental: string;
   syncedLyrics: string;
+  plainLyrics?: string;
+  lyricsSourceUrl?: string;
   youtubeId: string;
   startSeconds: number;
 };

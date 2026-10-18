@@ -816,6 +816,7 @@ export default function App() {
       const response = await fetch(demoAsset("song.json"), { cache: "no-cache" });
       if (!response.ok) throw new Error("The demo song is not available yet.");
       const song: DemoSong = await response.json();
+      if (song.plainLyrics !== undefined && typeof song.plainLyrics !== "string") throw new Error("The demo lyrics could not be read.");
       if (![song.title, song.artist, song.credit, song.audio, song.vocals, song.instrumental].every((value) => typeof value === "string" && value.trim()) || typeof song.syncedLyrics !== "string" || !/^[\w-]{11}$/.test(song.youtubeId) || !Number.isFinite(song.startSeconds) || song.startSeconds < 0) {
         throw new Error("The demo song is missing audio or video information.");
       }
@@ -1161,7 +1162,14 @@ export default function App() {
             style={{ "--seek-progress": `${duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0}%` } as CSSProperties & { "--seek-progress": string }}
           />
           {audioName && <section className="lyrics-panel" aria-label="Synchronized lyrics">
-            {DEMO_MODE && !selectedLyrics && <p className="lyrics-message">Synchronized lyrics are unavailable for this demo song.</p>}
+            {DEMO_MODE && !selectedLyrics && demoSong?.plainLyrics && <>
+              <h2 className="demo-lyrics-heading">Lyrics</h2>
+              <div className="demo-plain-lyrics" role="region" aria-label="Song lyrics" tabIndex={0}>
+                <p>{demoSong.plainLyrics}</p>
+              </div>
+              <p className="lyrics-credit">Lyrics via <a href="https://lrclib.net" target="_blank" rel="noreferrer">LRCLIB</a> · Scroll to follow along. Synchronized timing is unavailable for this song.</p>
+            </>}
+            {DEMO_MODE && !selectedLyrics && !demoSong?.plainLyrics && <p className="lyrics-message">Lyrics are unavailable for this demo song.</p>}
             {!selectedLyrics && !DEMO_MODE && <>
               <form className="lyrics-search" onSubmit={(event) => { event.preventDefault(); void searchLyrics(lyricsQuery); }}>
                 <input aria-label="Search lyrics by song title" value={lyricsQuery} onChange={(event) => setLyricsQuery(event.target.value)} placeholder="Search by song title" />
