@@ -17,6 +17,17 @@
   padding-top: 8px;
 }
 
+.demo-intro { margin: 0 0 22px; }
+.demo-intro h1 { margin: 8px 0; font-size: clamp(30px, 6vw, 48px); }
+.demo-intro p { line-height: 1.6; }
+.demo-eyebrow { color: #73805e; font-size: 13px; font-weight: 600; }
+.demo-note { color: #747164; font-size: 13px; }
+.demo-player-label { position: absolute; inset: 0; display: flex; height: 100%; flex-direction: column; justify-content: center; align-items: center; gap: 14px; padding: 20px; background: #171813; color: #f0eee3; text-align: center; }
+.demo-player-label strong { font-size: clamp(18px, 4vw, 30px); }
+.demo-player-label span { color: #c8cbb7; }
+.demo-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.demo-transport a { color: #596644; font-size: 13px; }
+
 .youtube-input-shell {
   position: relative;
   width: 100%;

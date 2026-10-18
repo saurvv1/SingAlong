@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import Sampler, { type SamplerTake } from "./Sampler";
+import { DEMO_MODE, createDemoPlayer, demoAsset, type DemoSong } from "./demo";
 import "./App.css";
 
 declare global {
@@ -75,6 +76,9 @@ function parseSyncedLyrics(raw: string): LyricLine[] {
 }
 
 export default function App() {
+  const [demoSong, setDemoSong] = useState<DemoSong | null>(null);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoVideoError, setDemoVideoError] = useState("");
   const [url, setUrl] = useState("");
   const [youtubeResults, setYoutubeResults] = useState<YouTubeSearchResult[]>([]);
   const [youtubeSearchLoading, setYoutubeSearchLoading] = useState(false);
@@ -135,7 +139,7 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const vocalsRef = useRef<HTMLAudioElement>(null);
   const instrumentalRef = useRef<HTMLAudioElement>(null);
-  const videoId = getYouTubeId(url);
+  const videoId = DEMO_MODE ? (demoSong ? "prepared-demo" : null) : getYouTubeId(url);
   const lyricLines = useMemo(
     () => selectedLyrics ? parseSyncedLyrics(selectedLyrics.syncedLyrics) : [],
     [selectedLyrics],
@@ -171,7 +175,11 @@ export default function App() {
       return;
     }
 
-    callPlayerMethod("playVideo");
+    const playback = callPlayerMethod("playVideo");
+    if (DEMO_MODE && playback?.catch) playback.catch(() => {
+      [audioRef.current, vocalsRef.current, instrumentalRef.current].forEach((track) => track?.pause());
+      setError("Playback could not start. Try the Play demo button again.");
+    });
     if (audioUrlRef.current) {
       const time = callPlayerMethod("getCurrentTime") || 0;
       const tracks = stems && instrumentalRef.current
@@ -257,6 +265,59 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (DEMO_MODE) {
+      if (!demoSong || !audioRef.current) return;
+      const audio = audioRef.current;
+      let disposed = false;
+      let video: any = null;
+      let videoReady = false;
+      playerRef.current = createDemoPlayer(audio);
+      const timeout = window.setTimeout(() => {
+        if (!videoReady) setDemoVideoError("YouTube did not load. Audio and recording are still available.");
+      }, 12000);
+      loadYouTubeApi().then(() => {
+        if (disposed || !playerContainerRef.current) return;
+        video = new window.YT!.Player(playerContainerRef.current, {
+          videoId: demoSong.youtubeId,
+          playerVars: { playsinline: 1, controls: 0, disablekb: 1, start: demoSong.startSeconds, origin: window.location.origin },
+          events: {
+            onReady: () => {
+              if (disposed) return;
+              videoReady = true;
+              window.clearTimeout(timeout);
+              setDemoVideoError("");
+              video.mute();
+              video.seekTo(demoSong.startSeconds + audio.currentTime, true);
+            },
+            onError: (event: any) => {
+              videoReady = false;
+              window.clearTimeout(timeout);
+              setDemoVideoError(`YouTube playback is unavailable (error ${event.data}). Audio and recording are still available.`);
+            },
+          },
+        });
+      }).catch(() => setDemoVideoError("YouTube could not load. Audio and recording are still available."));
+      const timer = window.setInterval(() => {
+        setCurrentTime(audio.currentTime);
+        if (Number.isFinite(audio.duration)) setDuration(audio.duration);
+        if (videoReady) {
+          try {
+            const target = demoSong.startSeconds + audio.currentTime;
+            if (Math.abs(video.getCurrentTime() - target) > 0.8) video.seekTo(target, true);
+            if (!audio.paused && video.getPlayerState() !== 1 && video.getPlayerState() !== 3) video.playVideo();
+            if (audio.paused && video.getPlayerState() === 1) video.pauseVideo();
+          } catch { /* Audio continues if the external player becomes unavailable. */ }
+        }
+      }, 100);
+      return () => {
+        disposed = true;
+        window.clearTimeout(timeout);
+        window.clearInterval(timer);
+        video?.destroy?.();
+        audio.pause();
+        playerRef.current = null;
+      };
+    }
     if (!videoId || !playerContainerRef.current) return;
     let disposed = false;
     let timer: number | undefined;
@@ -325,9 +386,10 @@ export default function App() {
       resumingFromBackgroundRef.current = false;
       setYoutubePlaying(false);
     };
-  }, [videoId, searchLyrics]);
+  }, [videoId, searchLyrics, demoSong]);
 
   useEffect(() => {
+    if (DEMO_MODE) return;
     if (!audioName) return;
     const query = audioName.replace(/\.(mp3|m4a|aac|wav|ogg|flac|opus)$/i, "");
     setLyricsQuery(query);
@@ -601,7 +663,7 @@ export default function App() {
           : [audioRef.current];
 
         if (stems) {
-          audioRef.current?.pause();
+          if (!DEMO_MODE) audioRef.current?.pause();
           if (vocalsRef.current) vocalsRef.current.volume = audioVolume * vocalVolume;
           if (!vocalEnabled) vocalsRef.current?.pause();
         }
@@ -747,7 +809,33 @@ export default function App() {
   };
   loadAudioRef.current = loadAudio;
 
+  const loadDemo = async () => {
+    setDemoLoading(true);
+    setError("");
+    try {
+      const response = await fetch(demoAsset("song.json"));
+      if (!response.ok) throw new Error("The demo song is not available yet.");
+      const song: DemoSong = await response.json();
+      if (![song.title, song.artist, song.credit, song.audio, song.vocals, song.instrumental].every((value) => typeof value === "string" && value.trim()) || typeof song.syncedLyrics !== "string" || !/^[\w-]{11}$/.test(song.youtubeId) || !Number.isFinite(song.startSeconds) || song.startSeconds < 0) {
+        throw new Error("The demo song is missing audio or video information.");
+      }
+      // Check all stems before exposing the playback controls.
+      const responses = await Promise.all([song.audio, song.vocals, song.instrumental].map((path) => fetch(demoAsset(path))));
+      if (responses.some((asset) => !asset.ok)) throw new Error("A demo audio file could not be loaded.");
+      const blobs = await Promise.all(responses.map((asset) => asset.blob()));
+      await loadAudioRef.current(new File([blobs[0]!], song.title, { type: blobs[0]!.type }));
+      setStems({ vocals: demoAsset(song.vocals), instrumental: demoAsset(song.instrumental) });
+      setSelectedLyrics(song.syncedLyrics.trim() ? { id: 0, trackName: song.title, artistName: song.artist, albumName: "Demo", duration: 0, syncedLyrics: song.syncedLyrics } : null);
+      setDemoSong(song);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load the demo song.");
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   useEffect(() => {
+    if (DEMO_MODE) return;
     if (!videoId) {
       setLoadingYoutubeAudio(false);
       return;
@@ -796,6 +884,7 @@ export default function App() {
   }, [videoId]);
 
   useEffect(() => {
+    if (DEMO_MODE) return;
     const handlePaste = (event: ClipboardEvent) => {
       if (event.target === youtubeInputRef.current) return;
       const pastedText = event.clipboardData?.getData("text/plain").trim();
@@ -948,6 +1037,16 @@ export default function App() {
 
   return (
     <main className={`app${videoId ? " has-video" : ""}`}>
+      {DEMO_MODE && <section className="demo-intro">
+        <p className="demo-eyebrow">SingAlong · Interactive demo</p>
+        <h1>Sing it your way.</h1>
+        <p>Turn down the original singer and record your own voice. Try headphones for a cleaner recording.</p>
+        <p className="demo-note">This demo uses a prepared song. YouTube search and processing new songs are available in the full local app.</p>
+        {!demoSong && <button className="action-button" disabled={demoLoading} onClick={() => void loadDemo()}>{demoLoading ? "Loading song…" : "Try demo song"}</button>}
+        {demoSong && <p className="demo-note">{demoSong.credit} · Recordings stay in this browser session.</p>}
+        {!demoSong && error && <p role="alert" className="error-message">{error}</p>}
+      </section>}
+      {!DEMO_MODE && <>
       <div className={`youtube-input-shell${videoId ? " has-video" : ""}`}>
         <input
           ref={youtubeInputRef}
@@ -979,6 +1078,7 @@ export default function App() {
             </button>
           </li>)}
         </ul>}
+      </>}
 
       {videoId && (
         <>
@@ -998,6 +1098,7 @@ export default function App() {
             }}
           >
             <div ref={playerContainerRef} />
+            {DEMO_MODE && demoVideoError && <div className="demo-player-label"><strong>{demoSong?.title}</strong><span>{demoVideoError}</span><span>{youtubePlaying ? "Pause" : "Play"} · K</span></div>}
           </div>
             <div className="audio-actions">
               {audioName && <span className="audio-name">{audioName}</span>}
@@ -1046,6 +1147,7 @@ export default function App() {
               )}
             </div>
           </div>
+          {DEMO_MODE && <div className="demo-transport"><button className="action-button" onClick={toggleYouTubePlayback}>{youtubePlaying ? "Pause" : "Play"} demo</button><a href={`https://www.youtube.com/watch?v=${demoSong?.youtubeId}`} target="_blank" rel="noreferrer">Watch on YouTube</a><span className="demo-note">45-second excerpt · 00:30–01:15</span></div>}
           <input
             className="youtube-seekbar"
             type="range"
@@ -1059,7 +1161,8 @@ export default function App() {
             style={{ "--seek-progress": `${duration ? Math.max(0, Math.min(100, (currentTime / duration) * 100)) : 0}%` } as CSSProperties & { "--seek-progress": string }}
           />
           {audioName && <section className="lyrics-panel" aria-label="Synchronized lyrics">
-            {!selectedLyrics && <>
+            {DEMO_MODE && !selectedLyrics && <p className="lyrics-message">Synchronized lyrics are unavailable for this demo song.</p>}
+            {!selectedLyrics && !DEMO_MODE && <>
               <form className="lyrics-search" onSubmit={(event) => { event.preventDefault(); void searchLyrics(lyricsQuery); }}>
                 <input aria-label="Search lyrics by song title" value={lyricsQuery} onChange={(event) => setLyricsQuery(event.target.value)} placeholder="Search by song title" />
                 <button type="submit" disabled={lyricsLoading}>{lyricsLoading ? "Searching…" : "Search"}</button>
@@ -1072,7 +1175,7 @@ export default function App() {
                 return <p key={`${line.time}-${lineIndex}`} className={`lyrics-line${lineIndex === activeLyricIndex ? " is-active" : ""}`} aria-current={lineIndex === activeLyricIndex ? "true" : undefined}>{line.text}</p>;
               })}
             </div>}
-            <p className="lyrics-credit">Synchronized lyrics via LRCLIB</p>
+            {(!DEMO_MODE || selectedLyrics) && <p className="lyrics-credit">{DEMO_MODE ? "Prepared lyrics for this demo" : "Synchronized lyrics via LRCLIB"}</p>}
           </section>}
           <div className="timeline-times"><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div>
           <div className="timeline-row">
@@ -1137,7 +1240,12 @@ export default function App() {
           {error && <p className="error-message">{error}</p>}
           {recordingError && <p className="error-message">{recordingError}</p>}
 
-          {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" />}
+          {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" muted={DEMO_MODE}
+            onPlay={() => { if (DEMO_MODE) { playbackIntentRef.current = true; setYoutubePlaying(true); resumeRecordingCapture(audioRef.current?.currentTime || 0); } }}
+            onPause={() => { if (DEMO_MODE) { playbackIntentRef.current = false; setYoutubePlaying(false); pauseRecordingCapture(); } }}
+            onEnded={() => { if (DEMO_MODE) { playbackIntentRef.current = false; setYoutubePlaying(false); pauseRecordingCapture(); } }}
+            onError={() => { if (DEMO_MODE) setError("The demo audio could not be played. Try another browser or reload the page."); }}
+          />}
           {stems && (
             <>
               <audio ref={vocalsRef} src={stems.vocals} preload="auto" />

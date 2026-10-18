@@ -1,0 +1,44 @@
+name: Deploy portfolio demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: singalong/package-lock.json
+      - run: npm ci
+        working-directory: singalong
+      - name: Check demo assets
+        run: node scripts/check-demo.mjs
+        working-directory: singalong
+      - name: Build demo
+        run: npm run build -- --base=/${{ github.event.repository.name }}/
+        working-directory: singalong
+        env:
+          VITE_DEMO_MODE: 'true'
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: singalong/dist
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

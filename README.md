@@ -19,7 +19,9 @@ The idea is to make shadow singing simple: start by singing with the artist, the
 
 SingAlong is in an early stage and is under active development. The goal is a hosted app that you can open through a link, with no installation needed to use it. A public deployment is not available yet.
 
-Screenshots and a demo will be added later.
+An interactive portfolio demo is prepared with a 45-second excerpt of Drake's **Janice STFU**, its YouTube embed, and prepared vocal and instrumental tracks. Try it locally with `npm run dev:demo` from `singalong`. This demo does not need the Python backend. Lyrics are unavailable for the selected track. Screenshots will be added later.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for free GitHub Pages deployment instructions and production preview steps.
 
 ## Run locally
 
