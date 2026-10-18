@@ -25,6 +25,10 @@ The interactive portfolio demo features the full music video version of Drake's 
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for free GitHub Pages deployment instructions and production preview steps.
 
+## Software quality and testing
+
+A [manual QA test plan](QA_TEST_PLAN.md) documents proposed scenarios for playback, recording, permissions, errors, browser compatibility, and responsiveness, along with a reusable bug report format. The scenarios are **not yet marked as executed**; results and discovered defects should be recorded as testing proceeds.
+
 ## Run locally
 
 These instructions are for running the full app from source. The hosted demo does not require this setup.
