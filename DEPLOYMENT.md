@@ -1,6 +1,6 @@
 # Free portfolio demo
 
-The GitHub Pages build enables a prepared-song demo of Drake's **Janice STFU**, using a 45-second excerpt from 00:30 to 01:15. It embeds the matching YouTube song and uses prepared audio for the recording, vocal controls, and sampler without starting the Python backend. If YouTube playback fails, the prepared audio remains usable. The regular local app keeps its YouTube search and processing features.
+The GitHub Pages build enables a prepared-song demo of Drake's **Janice STFU**, using the full music video version from the beginning. It embeds the music video (`SD4yRDY9mek`) and uses audio prepared from that same video for the recording, vocal controls, and sampler without starting the Python backend. If YouTube playback fails, the prepared audio remains usable. The regular local app keeps its YouTube search and processing features.
 
 Synchronized lyrics were not available from LRCLIB for this track when the demo was prepared. The demo shows an unavailable message; it does not invent lyric timestamps.
 
@@ -8,7 +8,7 @@ Synchronized lyrics were not available from LRCLIB for this track when the demo 
 
 Use a recording and lyrics you have permission to redistribute publicly, including the separated stems. Files in this folder will be publicly downloadable.
 
-1. Prepare a short song clip and its vocal and instrumental stems using the local backend.
+1. Prepare the song (or a shorter excerpt) and its vocal and instrumental stems using the local backend.
 2. Place the three audio files in `singalong/public/demo/`.
 3. Copy `song.example.json` to `song.json` in the same directory.
 4. Fill in the title, artist, credit, audio filenames, YouTube ID, and original song start time in seconds. All three audio tracks must have matching start times and duration. Use the same clip boundaries for every track. Set `syncedLyrics` to timestamped LRC text relative to the excerpt, or an empty string when unavailable.

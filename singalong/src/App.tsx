@@ -813,7 +813,7 @@ export default function App() {
     setDemoLoading(true);
     setError("");
     try {
-      const response = await fetch(demoAsset("song.json"));
+      const response = await fetch(demoAsset("song.json"), { cache: "no-cache" });
       if (!response.ok) throw new Error("The demo song is not available yet.");
       const song: DemoSong = await response.json();
       if (![song.title, song.artist, song.credit, song.audio, song.vocals, song.instrumental].every((value) => typeof value === "string" && value.trim()) || typeof song.syncedLyrics !== "string" || !/^[\w-]{11}$/.test(song.youtubeId) || !Number.isFinite(song.startSeconds) || song.startSeconds < 0) {
@@ -1147,7 +1147,7 @@ export default function App() {
               )}
             </div>
           </div>
-          {DEMO_MODE && <div className="demo-transport"><button className="action-button" onClick={toggleYouTubePlayback}>{youtubePlaying ? "Pause" : "Play"} demo</button><a href={`https://www.youtube.com/watch?v=${demoSong?.youtubeId}`} target="_blank" rel="noreferrer">Watch on YouTube</a><span className="demo-note">45-second excerpt · 00:30–01:15</span></div>}
+          {DEMO_MODE && <div className="demo-transport"><button className="action-button" onClick={toggleYouTubePlayback}>{youtubePlaying ? "Pause" : "Play"} demo</button><a href={`https://www.youtube.com/watch?v=${demoSong?.youtubeId}`} target="_blank" rel="noreferrer">Watch on YouTube</a><span className="demo-note">Full song · Music video{duration > 0 ? ` · ${formatTime(duration)}` : ""}</span></div>}
           <input
             className="youtube-seekbar"
             type="range"
