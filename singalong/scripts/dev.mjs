@@ -55,7 +55,7 @@ function launch(label, command, args, cwd) {
 
 console.log("Starting SingAlong web app and local audio service...");
 launch("Audio service", python, ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8001", "--reload"], backendDir);
-launch("Web app", process.execPath, [vite, "--host", "127.0.0.1"], frontendDir);
+launch("Web app", process.execPath, [vite, "--host", "localhost"], frontendDir);
 
 process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));

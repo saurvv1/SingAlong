@@ -1,0 +1,25 @@
+# Local editor settings
+/.vscode/
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Downloaded audio, generated stems, and model weights
+/backend/downloads/
+/backend/generated/
+/backend/models/
+
+# Runtime logs
+*.log
